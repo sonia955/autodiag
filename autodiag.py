@@ -1,26 +1,19 @@
 """
-AutoDiag — Moteur de diagnostic prédictif automobile low-cost
-Auteure : Evouna Sonia Ninon
+AutoDiag v0.1 — Prototype logiciel de diagnostic automobile.
 
-Ce script simule le cœur logique du système AutoDiag : à partir d'un code
-défaut (DTC) lu sur la prise OBD2 d'un véhicule, il détermine un niveau de
-gravité (Vert / Orange / Rouge) et génère un message clair, compréhensible
-par un conducteur non technicien — y compris une version "alerte vocale"
-en langage courant.
+Projet personnel d'Evouna Sonia Ninon.
+Le prototype explore deux approches :
+- diagnostic réactif à partir de codes DTC ;
+- détection précoce d'une anomalie de température par seuils indicatifs.
 
-Les codes DTC utilisés ici sont des codes génériques standardisés
-(norme SAE J2012 / ISO 15031-6), utilisés par tous les véhicules
-compatibles OBD2 dans le monde.
+Les seuils de température ne constituent pas un modèle prédictif validé :
+ils devront être confrontés à des données réelles de terrain.
 """
 
 import json
 import os
 from datetime import datetime
 
-# --- Base de données des codes DTC les plus courants ---
-# Format : code -> (description technique, gravité)
-# Gravité : "VERT" (surveillance), "ORANGE" (à traiter prochainement),
-# "ROUGE" (urgent, risque pour le véhicule ou la sécurité)
 
 DTC_DATABASE = {
     "P0100": ("Circuit du débitmètre d'air défaillant", "ORANGE"),
@@ -41,26 +34,24 @@ DTC_DATABASE = {
     "P0700": ("Anomalie détectée dans le système de transmission", "ORANGE"),
 }
 
-# Messages clairs associés à chaque niveau de gravité, pour l'alerte vocale
+
 MESSAGES_GRAVITE = {
     "VERT": "Anomalie mineure détectée. Aucune action urgente n'est nécessaire, mais surveillez votre véhicule.",
     "ORANGE": "Anomalie détectée. Il est recommandé de faire vérifier votre véhicule prochainement.",
-    "ROUGE": "Anomalie sérieuse détectée. Arrêtez-vous dès que possible et faites vérifier votre véhicule.",
+    "ROUGE": "Anomalie sérieuse détectée. Faites vérifier le véhicule rapidement et évitez de poursuivre si la situation est dangereuse.",
 }
+
 
 HISTORIQUE_FICHIER = "historique_diagnostics.json"
 
 
 def diagnostiquer(code_dtc: str) -> dict:
-    """
-    Prend un code DTC en entrée et retourne un diagnostic complet :
-    description technique, niveau de gravité, et message clair pour
-    le conducteur (base de l'alerte vocale).
-    """
+    """Analyse un code DTC et retourne un diagnostic structuré."""
     code_dtc = code_dtc.strip().upper()
 
     if code_dtc not in DTC_DATABASE:
         return {
+            "type": "diagnostic_dtc",
             "code": code_dtc,
             "description": "Code non reconnu dans la base AutoDiag actuelle.",
             "gravite": "INCONNU",
@@ -69,6 +60,7 @@ def diagnostiquer(code_dtc: str) -> dict:
 
     description, gravite = DTC_DATABASE[code_dtc]
     return {
+        "type": "diagnostic_dtc",
         "code": code_dtc,
         "description": description,
         "gravite": gravite,
@@ -78,37 +70,36 @@ def diagnostiquer(code_dtc: str) -> dict:
 
 def evaluer_temperature_moteur(temperature_celsius: float) -> dict:
     """
-    Évaluation PRÉDICTIVE (et non réactive) : à partir d'une lecture de
-    température moteur en direct, détecte une dérive AVANT qu'un code
-    défaut comme P0217 (surchauffe) ne soit déclenché par le véhicule.
+    Détecte une dérive de température à partir de seuils indicatifs.
 
-    C'est la différence entre diagnostic réactif (lire un code après coup)
-    et diagnostic prédictif (anticiper avant l'apparition du code) —
-    l'objectif central d'AutoDiag.
-
-    Seuils indicatifs (à affiner avec des données réelles de terrain) :
-    - < 95°C  : normal
-    - 95-104°C : dérive à surveiller
-    - >= 105°C : risque de surchauffe imminent
+    Cette fonction est une première approche de détection précoce d'anomalie,
+    et non un modèle prédictif validé. Les seuils devront être affinés à
+    partir de données réelles de terrain.
     """
+    if not isinstance(temperature_celsius, (int, float)):
+        raise ValueError("La température doit être une valeur numérique.")
+
+    if temperature_celsius < -50 or temperature_celsius > 200:
+        raise ValueError("Température hors de la plage de test du prototype (-50 à 200 °C).")
+
     if temperature_celsius >= 105:
         gravite = "ROUGE"
         message = (
-            f"Température moteur anormalement élevée ({temperature_celsius}°C). "
-            "Arrêtez-vous dès que possible, avant qu'un code défaut ne soit déclenché."
+            f"Température moteur élevée ({temperature_celsius}°C). "
+            "Faites vérifier le véhicule et évitez de poursuivre si la situation est dangereuse."
         )
     elif temperature_celsius >= 95:
         gravite = "ORANGE"
         message = (
-            f"Température moteur en légère dérive ({temperature_celsius}°C). "
-            "Surveillez et faites vérifier le circuit de refroidissement prochainement."
+            f"Température moteur en dérive ({temperature_celsius}°C). "
+            "Surveillez le véhicule et faites vérifier le circuit de refroidissement."
         )
     else:
         gravite = "VERT"
-        message = f"Température moteur normale ({temperature_celsius}°C)."
+        message = f"Température moteur dans la plage normale du prototype ({temperature_celsius}°C)."
 
     return {
-        "type": "lecture_predictive",
+        "type": "lecture_temperature",
         "parametre": "température moteur",
         "valeur": temperature_celsius,
         "gravite": gravite,
@@ -116,69 +107,87 @@ def evaluer_temperature_moteur(temperature_celsius: float) -> dict:
     }
 
 
-def enregistrer_historique(diagnostic: dict):
-    """Enregistre chaque diagnostic effectué dans un historique JSON local."""
+def enregistrer_historique(diagnostic: dict) -> None:
+    """Enregistre un diagnostic dans un historique JSON local."""
     historique = []
+
     if os.path.exists(HISTORIQUE_FICHIER):
-        with open(HISTORIQUE_FICHIER, "r", encoding="utf-8") as f:
-            historique = json.load(f)
+        try:
+            with open(HISTORIQUE_FICHIER, "r", encoding="utf-8") as fichier:
+                historique = json.load(fichier)
+        except (json.JSONDecodeError, OSError):
+            historique = []
 
     diagnostic_horodate = dict(diagnostic)
     diagnostic_horodate["date"] = datetime.now().isoformat(timespec="seconds")
     historique.append(diagnostic_horodate)
 
-    with open(HISTORIQUE_FICHIER, "w", encoding="utf-8") as f:
-        json.dump(historique, f, ensure_ascii=False, indent=2)
+    with open(HISTORIQUE_FICHIER, "w", encoding="utf-8") as fichier:
+        json.dump(historique, fichier, ensure_ascii=False, indent=2)
 
 
-def afficher_diagnostic(diagnostic: dict):
-    """Affiche le diagnostic dans le terminal avec un code couleur simple."""
-    couleurs_ansi = {"VERT": "\033[92m", "ORANGE": "\033[93m", "ROUGE": "\033[91m", "INCONNU": "\033[90m"}
+def afficher_diagnostic(diagnostic: dict) -> None:
+    """Affiche un diagnostic DTC dans le terminal."""
+    couleurs_ansi = {
+        "VERT": "\033[92m",
+        "ORANGE": "\033[93m",
+        "ROUGE": "\033[91m",
+        "INCONNU": "\033[90m",
+    }
     reset = "\033[0m"
     couleur = couleurs_ansi.get(diagnostic["gravite"], "")
 
     print(f"\nCode : {diagnostic['code']}")
     print(f"Description : {diagnostic['description']}")
     print(f"Gravité : {couleur}{diagnostic['gravite']}{reset}")
-    print(f"Alerte vocale (texte) : \"{diagnostic['message']}\"\n")
+    print(f"Message utilisateur : \"{diagnostic['message']}\"\n")
 
 
-def afficher_lecture_predictive(lecture: dict):
-    """Affiche une lecture prédictive (ex. température) avec code couleur."""
+def afficher_lecture_temperature(lecture: dict) -> None:
+    """Affiche une lecture de température dans le terminal."""
     couleurs_ansi = {"VERT": "\033[92m", "ORANGE": "\033[93m", "ROUGE": "\033[91m"}
     reset = "\033[0m"
     couleur = couleurs_ansi.get(lecture["gravite"], "")
 
     print(f"\nParamètre surveillé : {lecture['parametre']} = {lecture['valeur']}°C")
     print(f"Gravité : {couleur}{lecture['gravite']}{reset}")
-    print(f"Alerte vocale (texte) : \"{lecture['message']}\"\n")
+    print(f"Message utilisateur : \"{lecture['message']}\"\n")
 
 
-if __name__ == "__main__":
-    print("=== AutoDiag — Simulateur de diagnostic prédictif (v0.2) ===")
-    print("1 = Diagnostiquer à partir d'un code DTC (réactif)")
-    print("2 = Lecture prédictive de la température moteur (avant panne)")
+def main() -> None:
+    print("=== AutoDiag v0.1 — Prototype logiciel de diagnostic automobile ===")
+    print("1 = Diagnostic à partir d'un code DTC (réactif)")
+    print("2 = Détection précoce d'anomalie de température (seuils indicatifs)")
     print("q = Quitter\n")
 
     while True:
         mode = input("Mode (1/2/q) > ").strip().lower()
+
         if mode in ("q", "quitter", "exit"):
             break
-        elif mode == "1":
+
+        if mode == "1":
             entree = input("Code DTC > ")
             diagnostic = diagnostiquer(entree)
             afficher_diagnostic(diagnostic)
             enregistrer_historique(diagnostic)
+
         elif mode == "2":
             try:
-                temp = float(input("Température moteur (°C) > "))
-            except ValueError:
-                print("Merci d'entrer un nombre valide.\n")
+                temperature = float(input("Température moteur (°C) > "))
+                lecture = evaluer_temperature_moteur(temperature)
+            except ValueError as erreur:
+                print(f"Entrée invalide : {erreur}\n")
                 continue
-            lecture = evaluer_temperature_moteur(temp)
-            afficher_lecture_predictive(lecture)
+
+            afficher_lecture_temperature(lecture)
             enregistrer_historique(lecture)
+
         else:
             print("Choix non reconnu.\n")
 
     print("Historique enregistré dans", HISTORIQUE_FICHIER)
+
+
+if __name__ == "__main__":
+    main()
